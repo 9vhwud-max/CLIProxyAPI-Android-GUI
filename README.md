@@ -2,7 +2,7 @@
 
 [![Release](https://img.shields.io/github/v/release/tsaQB/cliproxyapi-android?style=flat-square&color=38bdf8)](https://github.com/tsaQB/cliproxyapi-android/releases/latest)
 [![License](https://img.shields.io/github/license/tsaQB/cliproxyapi-android?style=flat-square&color=f59e0b)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Android%207.0%2B%20(ARM64)-emerald?style=flat-square)](#requirements)
+[![Platform](https://img.shields.io/badge/Platform-Android%207.0%2B%20(ARM64)-10b981?style=flat-square)](#requirements)
 
 High-Performance ARM64 Android service & native proxy for [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI).  
 Supports both **Non-Root (Termux Native)** and **Root (Magisk / KernelSU / APatch)**.
@@ -49,11 +49,18 @@ cliproxyapi update     # Upgrade binary & WebUI to latest release
 cliproxyapi restart    # Restart service
 cliproxyapi stop       # Stop background service
 cliproxyapi run        # Run foreground in terminal
+cliproxyapi help       # Show available commands
 ```
+
+> [!TIP]
+> Android may stop background processes when the screen is off. Run `termux-wake-lock` (or use the Termux notification's *Acquire wakelock* button) to keep the service alive. The service does not start automatically after a reboot; run `cliproxyapi start` again.
 
 #### Access WebUI Dashboard:
 * **URL:** `http://127.0.0.1:8317/management.html`
-* **Secret Key (Password):** `admin123` *(Preserved automatically on upgrades)*
+* **Secret Key (Password):** `admin123` *(Preserved automatically on upgrades; change it after the first login)*
+
+> [!NOTE]
+> CLIProxyAPI hashes the plaintext `secret-key` on first start, so `config.yaml` shows a bcrypt hash afterwards. Your password is still the value you set (default `admin123`), and the installer summary shows `(hashed ...)` on re-installs.
 
 ---
 
