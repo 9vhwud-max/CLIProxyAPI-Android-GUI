@@ -667,7 +667,6 @@ jobs:
           VERSION_CODE: ${{ steps.appver.outputs.code }}
           SIGNED: ${{ steps.signing.outputs.ready }}
           SIGNING_MODE: ${{ steps.signing.outputs.mode }}
-          SIGNING_MODE: ${{ steps.signing.outputs.mode }}
         shell: bash
         run: |
           set -euo pipefail
