@@ -1,0 +1,6 @@
+dist/
+tmp/
+__pycache__/
+*.pyc
+packaging/magisk/bin/cli-proxy-api
+packaging/magisk/static/management.html

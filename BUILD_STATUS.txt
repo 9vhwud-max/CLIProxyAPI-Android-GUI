@@ -1,0 +1,30 @@
+CLIProxyAPI Android GUI build status
+===================================
+
+Source/static checks performed in the generation environment:
+- Android XML parse: PASS
+- Java R.id references resolve against activity_main.xml: PASS
+- Shell scripts bash -n: PASS
+- No android.webkit / System WebView source references: PASS
+- GeckoView embedded-engine dependency configured: PASS
+- Android 16 KB native ELF alignment flags configured: PASS
+
+Not executable in the generation environment:
+- Android Gradle assembleDebug: Android SDK/NDK are not installed here.
+- Go Android native core build: user-side Go/NDK native build has been confirmed through the native-core stage; final APK still requires a successful Gradle assemble on the target build host.
+
+Use build-all.ps1 -Arm64Only on Windows with Android SDK/NDK + Go 1.26+.
+
+Patch 2026-10-06:
+- build-all.ps1: auto-discover JDK/JBR, explicit failure handling and APK verification.
+- android-app/gradlew.bat: preserve Gradle's exit code and honor JAVA_HOME.
+- Added -SkipGo / -SkipNative switch to reuse already compiled native ELF.
+- Windows execution and Android assembleDebug have NOT been tested in this environment.
+
+UI/browser rework 2026-10-07:
+- Added real top-level fullscreen host; browser card is re-parented instead of merely hiding config.
+- Added Gecko multi-tab manager with target=_blank/window.open -> new in-app GeckoSession.
+- Added tab close/switch/new-tab controls and an editable address bar.
+- All browser tabs share contextId=cliproxy-browser inside the app-private Gecko profile.
+- Added explicit status/navigation/display-cutout WindowInsets handling for normal mode.
+- Resource ID cross-check after rework: PASS.

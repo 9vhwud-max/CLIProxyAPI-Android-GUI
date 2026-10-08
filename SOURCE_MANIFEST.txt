@@ -1,0 +1,22 @@
+CLIProxyAPI Android GUI delivery manifest
+Generated: 2026-10-07
+
+Original uploads:
+2bbdbe0df8750da85e1b6000f368c7c6d4a879e26c735e90fd3ac3634618af28  CLIProxyAPI-main.zip
+a9a1713ef8003641f4978aa3c95d112f3285b84e2c68c1df09470a404dbede50  cliproxyapi-android-main.zip
+
+Current key files:
+1eab00d1fcf59e0f6489ec0810728b600e88c553d7cf11a11c907cca5b863fd4  android-app/app/build.gradle.kts
+501b6dd588eb17acc237936be7737334846852fa1b2de0105e3f5c8a10e95855  android-app/app/src/main/AndroidManifest.xml
+46a344d83d2ac9816213a2142b43f599e0b8a3e08d25da18997407cc324a706d  android-app/app/src/main/java/io/github/cliproxy/android/MainActivity.java
+a203dac158d8c5ec313728387e6b7db9a2a3d47bade8c04f23fab14dbd50a6ae  android-app/app/src/main/java/io/github/cliproxy/android/GeckoController.java
+e8f1d8627fff062420a36fb1bc08141f7f56b969be692deca56023d1f5bcef72  android-app/app/src/main/java/io/github/cliproxy/android/CpaService.java
+fe6eefbe090c2d1f7ba5d4bfa1839b7547507c3411c4c87eb4972966ce790889  android-app/app/src/main/java/io/github/cliproxy/android/ConfigRepository.java
+aba35d134ca0d71f19766cdf7329449fa9af0979bb118ddee59871a45c67677f  android-app/app/src/main/res/layout/activity_main.xml
+954231a189b68439a6caa278612dd8e7afa84f9117210e02bf495a477f647778  android-app/app/src/main/res/drawable/ic_close_24.xml
+a3ba189097eea796b2f2eeb94d10f46213235ebdae2f7c4d18d0e1e94ff19f01  android-app/gradle.properties
+4d6011d3b936e57054958d031725af8acc46a441a89f2e3ad3fe812f92b17c77  build-all.ps1
+35a4ed246358f73222fc8940eee353040d1e9cd7801e008957ed63302b02a554  scripts/build-go.ps1
+6964ec782d95d5f665ae1202eef7a5b63f97984576c6eb8d11444e42d1d86d26  README_CN.md
+68e4687f209f4fd65eea18de1c72328bf7c5a3fae0e0aed0cc3df57fc25be5d9  BUILD_STATUS.txt
+37449dba8414462a1d452e405ba9260fa05935154c7350d8ba702c3a83895781  REWORK_NOTES_2026-10-07.md

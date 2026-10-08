@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">CLIProxyAPI</string>
+    <string name="toolbar_title">CLIProxyAPI · Android</string>
+    <string name="toolbar_subtitle">原生 Go 服务 + 内置 GeckoView</string>
+    <string name="language_switch_to_zh">中文</string>
+    <string name="language_switch_to_en">EN</string>
+
+    <string name="section_service">服务</string>
+    <string name="status_checking">正在检查…</string>
+    <string name="action_start">启动</string>
+    <string name="action_restart">重启</string>
+    <string name="action_stop">停止</string>
+    <string name="section_server">服务器</string>
+    <string name="hint_host">主机 / 绑定地址</string>
+    <string name="hint_port">端口</string>
+    <string name="hint_trusted_proxies">可信代理 / CIDR · 每行一个</string>
+    <string name="opt_discovery">局域网发现（mDNS / DNS-SD）</string>
+    <string name="opt_commercial_mode">商业模式（降低中间件开销）</string>
+    <string name="section_access_management">访问与管理</string>
+    <string name="hint_api_keys">客户端 API Key · 每行一个</string>
+    <string name="hint_management_secret">管理密钥</string>
+    <string name="opt_allow_remote_management">允许远程管理</string>
+    <string name="opt_disable_webui">禁用管理 WebUI 路由</string>
+    <string name="opt_disable_webui_update">禁用 WebUI 自动更新</string>
+    <string name="hint_panel_repository">管理面板 GitHub 仓库</string>
+    <string name="section_routing_retry">路由与重试</string>
+    <string name="hint_routing_strategy">路由策略</string>
+    <string name="opt_session_affinity">会话粘性凭据路由</string>
+    <string name="hint_session_affinity_ttl">会话粘性 TTL · 例如 1h</string>
+    <string name="opt_session_subagents">子 Agent 继承父级凭据</string>
+    <string name="opt_force_model_prefix">带前缀凭据强制要求模型前缀</string>
+    <string name="hint_request_retry">请求重试轮数</string>
+    <string name="hint_max_retry_credentials">最大重试凭据数 · 0 = 全部</string>
+    <string name="hint_max_retry_wait">最大重试等待 · 秒</string>
+    <string name="opt_disable_cooling">禁用凭据冷却</string>
+    <string name="opt_save_cooldown">持久化冷却状态</string>
+    <string name="hint_transient_cooldown">瞬时错误冷却 · 秒（0=旧逻辑，-1=关闭）</string>
+    <string name="section_requests">请求</string>
+    <string name="hint_proxy_url">上游代理 URL</string>
+    <string name="opt_passthrough_headers">透传上游响应头</string>
+    <string name="hint_nonstream_keepalive">非流式响应保活 · 秒</string>
+    <string name="hint_stream_keepalive">SSE / WebSocket 保活 · 秒</string>
+    <string name="hint_bootstrap_retries">流式启动阶段重试次数</string>
+    <string name="section_observability">可观测性</string>
+    <string name="opt_debug_logging">调试日志</string>
+    <string name="opt_file_logging">写入轮转日志文件</string>
+    <string name="opt_request_log">请求 / 响应日志</string>
+    <string name="opt_usage_stats">使用统计</string>
+    <string name="hint_logs_max_size">日志总大小上限 · MB（0 = 不限制）</string>
+    <string name="hint_error_logs_max_files">错误日志最大文件数</string>
+    <string name="section_background">Android 后台策略</string>
+    <string name="opt_start_on_boot">设备重启后启动 CPA</string>
+    <string name="opt_auto_restart">Go 进程意外退出后自动重启</string>
+    <string name="opt_cpu_wakelock">CPA 运行时保持 CPU 唤醒</string>
+    <string name="opt_wifi_lock">保持 Wi‑Fi 无线电唤醒（更耗电）</string>
+    <string name="action_battery_settings">电池优化设置</string>
+    <string name="action_save_config">保存配置</string>
+    <string name="action_save_restart">保存并重启</string>
+    <string name="action_edit_yaml">高级 · 编辑完整 YAML</string>
+    <string name="action_view_log">查看壳层日志</string>
+
+    <string name="browser_home_desc">在当前标签打开 CLIProxyAPI WebUI</string>
+    <string name="browser_new_tab_desc">新建标签页</string>
+    <string name="browser_fullscreen_desc">切换浏览器全屏</string>
+    <string name="browser_back_desc">后退</string>
+    <string name="browser_forward_desc">前进</string>
+    <string name="browser_reload_desc">刷新</string>
+    <string name="browser_address_hint">网址</string>
+    <string name="browser_go">打开</string>
+    <string name="browser_go_desc">打开网址</string>
+    <string name="browser_hint">启动 CLIProxyAPI 后可打开 WebUI，也可以直接用地址栏在本应用内浏览网页。</string>
+    <string name="browser_data_button">数据</string>
+    <string name="browser_data_desc">浏览器数据与账号容器</string>
+    <string name="browser_tab_isolated_prefix">账号%1$d · %2$s</string>
+    <string name="browser_new_tab_title">新标签页</string>
+
+    <string name="browser_data_title">浏览器数据与账号</string>
+    <string name="browser_data_current_main">当前容器：主账号</string>
+    <string name="browser_data_current_isolated">当前容器：隔离账号 %1$d</string>
+    <string name="browser_data_explainer">普通标签页和 OAuth 弹窗会共享当前容器。隔离账号使用独立的 Cookie / 本地存储；关闭该隔离账号最后一个标签页时会自动清空其容器。</string>
+    <string name="browser_data_new_isolated">新建隔离账号标签页</string>
+    <string name="browser_data_clear_current">清空当前账号数据</string>
+    <string name="browser_data_clear_cache">清空浏览器缓存</string>
+    <string name="browser_data_clear_all_logins">清空所有账号 Cookie 与站点数据</string>
+    <string name="browser_data_clear_everything">清空全部 Gecko 浏览器数据</string>
+    <string name="browser_data_close">关闭</string>
+    <string name="browser_data_confirm_title">清空全部浏览器数据？</string>
+    <string name="browser_data_confirm_message">这会关闭全部 Gecko 标签页，并删除 Cookie、站点存储、缓存、站点权限和认证数据；不会删除 CLIProxyAPI 配置或 CPA 的 OAuth 凭据文件。</string>
+    <string name="browser_data_confirm_clear">全部清空</string>
+    <string name="browser_data_cleared_current">已清空当前账号容器</string>
+    <string name="browser_data_cleared_cache">已清空浏览器缓存</string>
+    <string name="browser_data_cleared_logins">已清空所有账号的 Cookie 与站点数据</string>
+    <string name="browser_data_cleared_all">已清空全部 Gecko 浏览器数据</string>
+    <string name="browser_data_failed">无法清空浏览器数据</string>
+
+    <string name="error_read_config">无法读取 config.yaml</string>
+    <string name="error_port_range">端口必须位于 1–65535</string>
+    <string name="msg_config_saved">配置已保存</string>
+    <string name="msg_management_secret_empty">管理密钥为空：WebUI 管理 API 将被禁用</string>
+    <string name="error_config_not_saved">配置未能保存</string>
+    <string name="status_battery_unrestricted">电池无限制</string>
+    <string name="status_battery_optimized">受电池优化限制</string>
+    <string name="status_unknown_abi">未知 ABI</string>
+    <string name="status_native_missing">缺少 %1$s 的原生核心 · 请先运行 build-all</string>
+    <string name="status_online">● 在线 · 127.0.0.1:%1$d · %2$s</string>
+    <string name="status_offline">○ 离线 · 原生核心已就绪 · %1$s</string>
+    <string name="yaml_title">完整 config.yaml</string>
+    <string name="yaml_message">这里可以编辑 GUI 尚未暴露的全部上游配置项。无效 YAML 会被拒绝。</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_save">保存</string>
+    <string name="msg_yaml_saved">原始 YAML 已保存</string>
+    <string name="error_yaml_invalid">YAML 无效或无法写入</string>
+    <string name="error_yaml_open">无法打开原始 YAML</string>
+    <string name="log_empty">暂无壳层日志。</string>
+    <string name="log_tail">…（仅显示末尾）\n</string>
+    <string name="log_title">Android 壳层 / 核心标准输出</string>
+    <string name="action_close">关闭</string>
+    <string name="action_reload">重新加载</string>
+    <string name="error_log_read">无法读取日志</string>
+    <string name="action_ok">确定</string>
+
+    <string name="service_channel">CLIProxyAPI 服务</string>
+    <string name="service_channel_description">让本地 CLIProxyAPI 网关在后台持续运行</string>
+    <string name="service_starting">正在启动原生 Go 服务…</string>
+    <string name="service_running">运行中</string>
+    <string name="service_running_pid">运行中 · PID %1$d</string>
+    <string name="service_start_failed">启动失败 · 请打开应用查看详情</string>
+    <string name="service_stop_action">停止</string>
+    <string name="service_stopped">已停止</string>
+
+    <string name="browser_new_account_button">账号+</string>
+    <string name="browser_new_account_desc">新建隔离账号容器</string>
+    <string name="browser_account_created">已新建隔离账号容器</string>
+</resources>

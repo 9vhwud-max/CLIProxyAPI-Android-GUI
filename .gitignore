@@ -1,6 +1,24 @@
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+*.iml
+.idea/
+
+# Generated native cores
+android-app/app/src/main/jniLibs/*/libcliproxyapi.so
+
+# Build artifacts
 dist/
-tmp/
-__pycache__/
-*.pyc
-packaging/magisk/bin/cli-proxy-api
-packaging/magisk/static/management.html
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Release signing material (never commit private keys)
+*.jks
+*.keystore
+signing.properties
+
+/CLIProxyAPI/

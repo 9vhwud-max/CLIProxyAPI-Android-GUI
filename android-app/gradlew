@@ -1,0 +1,8 @@
+#!/bin/sh
+APP_HOME=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+CLASSPATH="$APP_HOME/gradle/wrapper/gradle-wrapper.jar"
+if [ ! -f "$CLASSPATH" ]; then
+  echo "Missing gradle-wrapper.jar. Run ../scripts/bootstrap-gradle-wrapper.sh first." >&2
+  exit 2
+fi
+exec java -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"

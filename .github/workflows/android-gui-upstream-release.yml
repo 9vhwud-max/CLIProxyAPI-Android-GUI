@@ -1,0 +1,709 @@
+name: Android GUI direct-upstream auto release
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: 'tsaQB/cliproxyapi-android release tag; empty = latest release'
+        required: false
+        type: string
+      force:
+        description: 'Build a new -rN release even when this direct-upstream bundle already exists'
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    # Cross-repository releases cannot directly trigger this fork, so poll periodically.
+    - cron: '23 */4 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-gui-direct-upstream-auto-release
+  cancel-in-progress: false
+
+env:
+  DIRECT_UPSTREAM_REPOSITORY: tsaQB/cliproxyapi-android
+  ANDROID_PLATFORM_PACKAGE: platforms;android-37.0
+  ANDROID_BUILD_TOOLS_VERSION: '36.0.0'
+  ANDROID_NDK_VERSION: '30.0.16248370'
+
+jobs:
+  resolve:
+    name: Resolve direct upstream release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      skip: ${{ steps.release.outputs.skip }}
+      release_tag: ${{ steps.release.outputs.release_tag }}
+      shell_version: ${{ steps.release.outputs.shell_version }}
+      upstream_tag: ${{ steps.upstream.outputs.tag }}
+      upstream_release_id: ${{ steps.upstream.outputs.release_id }}
+      upstream_tar_asset_id: ${{ steps.upstream.outputs.tar_asset_id }}
+      upstream_tar_digest: ${{ steps.upstream.outputs.tar_digest }}
+      upstream_checksums_asset_id: ${{ steps.upstream.outputs.checksums_asset_id }}
+      upstream_provenance_asset_id: ${{ steps.upstream.outputs.provenance_asset_id }}
+    steps:
+      - name: Checkout Android GUI repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve tsaQB Android release
+        id: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.upstream_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -n "${INPUT_TAG:-}" ]; then
+            release_json=$(gh api "repos/${DIRECT_UPSTREAM_REPOSITORY}/releases/tags/${INPUT_TAG}")
+          else
+            release_json=$(gh api "repos/${DIRECT_UPSTREAM_REPOSITORY}/releases/latest")
+          fi
+
+          tag=$(jq -er '.tag_name' <<<"$release_json")
+          release_id=$(jq -er '.id' <<<"$release_json")
+          tar_asset_id=$(jq -er '.assets[] | select(.name == "cliproxyapi-android-arm64.tar.gz") | .id' <<<"$release_json")
+          tar_digest=$(jq -r '.assets[] | select(.name == "cliproxyapi-android-arm64.tar.gz") | .digest // empty' <<<"$release_json")
+          checksums_asset_id=$(jq -er '.assets[] | select(.name == "checksums.txt") | .id' <<<"$release_json")
+          provenance_asset_id=$(jq -er '.assets[] | select(.name == "provenance.json") | .id' <<<"$release_json")
+
+          if ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-r[0-9]+)?$ ]]; then
+            echo "Refusing unexpected direct-upstream release tag: $tag" >&2
+            exit 1
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "release_id=$release_id"
+            echo "tar_asset_id=$tar_asset_id"
+            echo "tar_digest=$tar_digest"
+            echo "checksums_asset_id=$checksums_asset_id"
+            echo "provenance_asset_id=$provenance_asset_id"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Direct upstream: ${DIRECT_UPSTREAM_REPOSITORY} ${tag}"
+
+      - name: Select immutable GUI release tag
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          UPSTREAM_TAG: ${{ steps.upstream.outputs.tag }}
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          shell_version=$(sed -n 's/^cpa\.shellVersionName=//p' android-app/gradle.properties | tail -n1)
+          [ -n "$shell_version" ] || { echo "cpa.shellVersionName is missing" >&2; exit 1; }
+
+          base_tag="android-v${shell_version}-tsa-${UPSTREAM_TAG}"
+
+          tag_exists() {
+            gh release view "$1" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 ||
+              gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$1" >/dev/null 2>&1
+          }
+
+          release_tag="$base_tag"
+          if tag_exists "$release_tag"; then
+            if [ "$FORCE" != true ]; then
+              {
+                echo "skip=true"
+                echo "release_tag=$release_tag"
+                echo "shell_version=$shell_version"
+              } >> "$GITHUB_OUTPUT"
+              echo "Direct-upstream bundle already released: $release_tag"
+              exit 0
+            fi
+
+            revision=1
+            while tag_exists "${base_tag}-r${revision}"; do
+              revision=$((revision + 1))
+              [ "$revision" -le 99 ] || { echo "No free revision tag found" >&2; exit 1; }
+            done
+            release_tag="${base_tag}-r${revision}"
+          fi
+
+          {
+            echo "skip=false"
+            echo "release_tag=$release_tag"
+            echo "shell_version=$shell_version"
+          } >> "$GITHUB_OUTPUT"
+          echo "Selected release: $release_tag"
+
+  build_release:
+    name: Build arm64 APK from tsaQB Android bundle
+    needs: resolve
+    if: needs.resolve.outputs.skip != 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Android GUI repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Download direct-upstream release bundle
+        id: upstream_bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAR_ASSET_ID: ${{ needs.resolve.outputs.upstream_tar_asset_id }}
+          TAR_DIGEST: ${{ needs.resolve.outputs.upstream_tar_digest }}
+          CHECKSUMS_ASSET_ID: ${{ needs.resolve.outputs.upstream_checksums_asset_id }}
+          PROVENANCE_ASSET_ID: ${{ needs.resolve.outputs.upstream_provenance_asset_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p direct-upstream extracted-upstream
+
+          gh api -H 'Accept: application/octet-stream' \
+            "repos/${DIRECT_UPSTREAM_REPOSITORY}/releases/assets/${TAR_ASSET_ID}" \
+            > direct-upstream/cliproxyapi-android-arm64.tar.gz
+          gh api -H 'Accept: application/octet-stream' \
+            "repos/${DIRECT_UPSTREAM_REPOSITORY}/releases/assets/${CHECKSUMS_ASSET_ID}" \
+            > direct-upstream/checksums.txt
+          gh api -H 'Accept: application/octet-stream' \
+            "repos/${DIRECT_UPSTREAM_REPOSITORY}/releases/assets/${PROVENANCE_ASSET_ID}" \
+            > direct-upstream/provenance.json
+
+          tar_sha=$(sha256sum direct-upstream/cliproxyapi-android-arm64.tar.gz | awk '{print $1}')
+          if [ -n "${TAR_DIGEST:-}" ]; then
+            expected=${TAR_DIGEST#sha256:}
+            [ "$tar_sha" = "$expected" ] || {
+              echo "Direct-upstream tarball GitHub digest mismatch: expected $expected, got $tar_sha" >&2
+              exit 1
+            }
+          fi
+
+          checksum_expected=$(awk '$2 == "cliproxyapi-android-arm64.tar.gz" || $2 == "*cliproxyapi-android-arm64.tar.gz" {print $1; exit}' direct-upstream/checksums.txt)
+          [ -n "$checksum_expected" ] || { echo "Direct-upstream checksums.txt has no tarball entry" >&2; exit 1; }
+          [ "$tar_sha" = "$checksum_expected" ] || {
+            echo "Direct-upstream checksums.txt mismatch: expected $checksum_expected, got $tar_sha" >&2
+            exit 1
+          }
+
+          jq -e . direct-upstream/provenance.json >/dev/null
+          tar -xzf direct-upstream/cliproxyapi-android-arm64.tar.gz -C extracted-upstream
+          [ -f extracted-upstream/cli-proxy-api ] || { echo "Direct-upstream bundle is missing cli-proxy-api" >&2; exit 1; }
+          [ -f extracted-upstream/management.html ] || { echo "Direct-upstream bundle is missing management.html" >&2; exit 1; }
+
+          panel_sha=$(sha256sum extracted-upstream/management.html | awk '{print $1}')
+          core_sha=$(sha256sum extracted-upstream/cli-proxy-api | awk '{print $1}')
+          {
+            echo "tar_sha256=$tar_sha"
+            echo "panel_sha256=$panel_sha"
+            echo "core_binary_sha256=$core_sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Read direct-upstream provenance
+        id: provenance
+        shell: bash
+        run: |
+          set -euo pipefail
+          p=direct-upstream/provenance.json
+
+          source_repo=$(jq -er '.source.repository' "$p")
+          source_tag=$(jq -er '.source.tag' "$p")
+          source_commit=$(jq -er '.source.commit' "$p")
+          models_repo=$(jq -er '.models.repository' "$p")
+          models_ref=$(jq -er '.models.ref' "$p")
+          models_commit=$(jq -er '.models.commit' "$p")
+          panel_repo=$(jq -er '.dashboard.repository' "$p")
+          panel_tag=$(jq -er '.dashboard.tag' "$p")
+          panel_sha=$(jq -er '.dashboard.sha256' "$p")
+          upstream_ndk=$(jq -r '.toolchain.androidNdk // empty' "$p")
+          upstream_go=$(jq -r '.toolchain.go // empty' "$p")
+
+          actual_panel_sha=$(sha256sum extracted-upstream/management.html | awk '{print $1}')
+          [ "$actual_panel_sha" = "$panel_sha" ] || {
+            echo "Bundled management.html does not match tsaQB provenance: expected $panel_sha, got $actual_panel_sha" >&2
+            exit 1
+          }
+
+          {
+            echo "source_repo=$source_repo"
+            echo "source_tag=$source_tag"
+            echo "source_commit=$source_commit"
+            echo "models_repo=$models_repo"
+            echo "models_ref=$models_ref"
+            echo "models_commit=$models_commit"
+            echo "panel_repo=$panel_repo"
+            echo "panel_tag=$panel_tag"
+            echo "panel_sha256=$panel_sha"
+            echo "upstream_ndk=$upstream_ndk"
+            echo "upstream_go=$upstream_go"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "tsaQB provenance pins core ${source_repo}@${source_tag} (${source_commit:0:12})"
+          echo "tsaQB provenance pins WebUI ${panel_repo}@${panel_tag}"
+
+      - name: Check direct-upstream core 16 KiB compatibility
+        id: core_compat
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary=extracted-upstream/cli-proxy-api
+          file "$binary"
+
+          bad=0
+          load_count=0
+          while read -r align; do
+            [ -n "$align" ] || continue
+            load_count=$((load_count + 1))
+            value=$((align))
+            if (( value < 0x4000 )); then
+              echo "Direct-upstream core has LOAD alignment $align (< 0x4000)."
+              bad=1
+            fi
+          done < <(readelf -lW "$binary" | awk '$1 == "LOAD" {print $NF}')
+          [ "$load_count" -gt 0 ] || { echo "No ELF LOAD segments found in direct-upstream core" >&2; exit 1; }
+
+          if [ "$bad" -eq 0 ]; then
+            echo "rebuild=false" >> "$GITHUB_OUTPUT"
+            echo "core_mode=direct-upstream-binary" >> "$GITHUB_OUTPUT"
+            echo "Direct-upstream core is already 16 KiB compatible; using it unchanged."
+          else
+            echo "rebuild=true" >> "$GITHUB_OUTPUT"
+            echo "core_mode=tsa-provenance-r30-rebuild" >> "$GITHUB_OUTPUT"
+            echo "::warning::tsaQB core is not 16 KiB aligned. Rebuilding the exact core commit pinned by tsaQB provenance with NDK r30; versions remain controlled exclusively by the direct upstream release."
+          fi
+
+      - name: Checkout exact core source pinned by tsaQB
+        if: steps.core_compat.outputs.rebuild == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.provenance.outputs.source_repo }}
+          ref: ${{ steps.provenance.outputs.source_commit }}
+          path: provenance-core
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout exact models catalog pinned by tsaQB
+        if: steps.core_compat.outputs.rebuild == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.provenance.outputs.models_repo }}
+          ref: ${{ steps.provenance.outputs.models_commit }}
+          path: provenance-models
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify provenance-pinned source and models checkouts
+        if: steps.core_compat.outputs.rebuild == 'true'
+        shell: bash
+        env:
+          EXPECTED_CORE_SHA: ${{ steps.provenance.outputs.source_commit }}
+          EXPECTED_MODELS_SHA: ${{ steps.provenance.outputs.models_commit }}
+        run: |
+          set -euo pipefail
+          actual_core=$(git -C provenance-core rev-parse HEAD)
+          [ "$actual_core" = "$EXPECTED_CORE_SHA" ] || {
+            echo "Core checkout mismatch: expected $EXPECTED_CORE_SHA, got $actual_core" >&2
+            exit 1
+          }
+          actual_models=$(git -C provenance-models rev-parse HEAD)
+          [ "$actual_models" = "$EXPECTED_MODELS_SHA" ] || {
+            echo "Models checkout mismatch: expected $EXPECTED_MODELS_SHA, got $actual_models" >&2
+            exit 1
+          }
+          [ -f provenance-models/models.json ] || { echo "Pinned models repository has no models.json" >&2; exit 1; }
+          cp provenance-models/models.json provenance-core/internal/registry/models/models.json
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: gradle
+          cache-dependency-path: |
+            android-app/**/*.gradle*
+            android-app/gradle/wrapper/gradle-wrapper.properties
+
+      - name: Set up Go for 16 KiB fallback rebuild
+        if: steps.core_compat.outputs.rebuild == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: provenance-core/go.mod
+          cache: true
+          cache-dependency-path: provenance-core/go.sum
+
+      - name: Set up Android SDK command-line tools
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform, build tools and optional NDK
+        shell: bash
+        env:
+          REBUILD_CORE: ${{ steps.core_compat.outputs.rebuild }}
+        run: |
+          set -euo pipefail
+          sdk_root=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}
+          [ -n "$sdk_root" ] || { echo "Android SDK root was not exported by setup-android" >&2; exit 1; }
+          echo "ANDROID_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
+
+          yes | sdkmanager --licenses >/dev/null || true
+          packages=(
+            "$ANDROID_PLATFORM_PACKAGE"
+            "build-tools;$ANDROID_BUILD_TOOLS_VERSION"
+            "platform-tools"
+          )
+          if [ "$REBUILD_CORE" = true ]; then
+            packages+=("ndk;$ANDROID_NDK_VERSION")
+          fi
+          sdkmanager "${packages[@]}"
+
+          if [ "$REBUILD_CORE" = true ]; then
+            echo "ANDROID_NDK_HOME=$sdk_root/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+          fi
+
+      - name: Stage direct-upstream WebUI and core
+        shell: bash
+        env:
+          REBUILD_CORE: ${{ steps.core_compat.outputs.rebuild }}
+          SOURCE_TAG: ${{ steps.provenance.outputs.source_tag }}
+          SOURCE_SHA: ${{ steps.provenance.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          mkdir -p android-app/app/src/main/assets/cpa
+          mkdir -p android-app/app/src/main/jniLibs/arm64-v8a
+          rm -f android-app/app/src/main/jniLibs/arm64-v8a/libcliproxyapi.so
+          rm -f android-app/app/src/main/jniLibs/x86_64/libcliproxyapi.so 2>/dev/null || true
+
+          cp extracted-upstream/management.html android-app/app/src/main/assets/cpa/management.html
+
+          if [ "$REBUILD_CORE" != true ]; then
+            cp extracted-upstream/cli-proxy-api android-app/app/src/main/jniLibs/arm64-v8a/libcliproxyapi.so
+          else
+            tc="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+            cc="$tc/aarch64-linux-android26-clang"
+            [ -x "$cc" ] || { echo "Android API 26 compiler not found: $cc" >&2; exit 1; }
+
+            build_epoch=$(git -C provenance-core show -s --format=%ct "$SOURCE_SHA")
+            build_date=$(date -u -d "@$build_epoch" +%Y-%m-%dT%H:%M:%SZ)
+            version=${SOURCE_TAG#v}
+            ldflags="-s -w -buildid= -checklinkname=0 -linkmode=external -X main.Version=${version} -X main.Commit=${SOURCE_SHA} -X main.BuildDate=${build_date}"
+            (
+              cd provenance-core
+              CGO_ENABLED=1 GOOS=android GOARCH=arm64 CC="$cc" \
+                go build -buildvcs=false -trimpath -ldflags="$ldflags" \
+                -o ../android-app/app/src/main/jniLibs/arm64-v8a/libcliproxyapi.so \
+                ./cmd/server/
+            )
+          fi
+
+          file android-app/app/src/main/jniLibs/arm64-v8a/libcliproxyapi.so
+          chmod 0755 android-app/app/src/main/jniLibs/arm64-v8a/libcliproxyapi.so
+
+      - name: Verify staged core is 16 KiB compatible
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary=android-app/app/src/main/jniLibs/arm64-v8a/libcliproxyapi.so
+          bad=0
+          load_count=0
+          while read -r align; do
+            [ -n "$align" ] || continue
+            load_count=$((load_count + 1))
+            value=$((align))
+            if (( value < 0x4000 )); then
+              echo "Staged core LOAD alignment is only $align" >&2
+              bad=1
+            fi
+          done < <(readelf -lW "$binary" | awk '$1 == "LOAD" {print $NF}')
+          [ "$load_count" -gt 0 ] || { echo "No ELF LOAD segments found in staged core" >&2; exit 1; }
+          [ "$bad" -eq 0 ] || exit 1
+
+      - name: Bootstrap Gradle wrapper if needed
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x android-app/gradlew scripts/bootstrap-gradle-wrapper.sh
+          if [ ! -f android-app/gradle/wrapper/gradle-wrapper.jar ]; then
+            ./scripts/bootstrap-gradle-wrapper.sh
+          fi
+
+      - name: Resolve Android package version
+        id: appver
+        env:
+          SHELL_VERSION: ${{ needs.resolve.outputs.shell_version }}
+          UPSTREAM_TAG: ${{ needs.resolve.outputs.upstream_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          upstream_version=${UPSTREAM_TAG#v}
+          version_name="${SHELL_VERSION}-tsa${upstream_version}"
+          version_code=$((100000000 + $(date -u +%s) / 60))
+          [ "$version_code" -lt 2100000000 ] || { echo "versionCode overflow" >&2; exit 1; }
+          {
+            echo "name=$version_name"
+            echo "code=$version_code"
+          } >> "$GITHUB_OUTPUT"
+          echo "versionName=$version_name"
+          echo "versionCode=$version_code"
+
+      - name: Detect release-signing secrets
+        id: signing
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_B64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Release signing secrets are incomplete. A debug APK will be built as an Actions artifact, but no GitHub Release will be published."
+          fi
+
+      - name: Build release APK
+        if: steps.signing.outputs.ready == 'true'
+        working-directory: android-app
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --stacktrace :app:assembleRelease \
+            -PcpaAbis=arm64-v8a \
+            -Pcpa.versionNameOverride='${{ steps.appver.outputs.name }}' \
+            -Pcpa.versionCodeOverride='${{ steps.appver.outputs.code }}'
+
+      - name: Build debug APK when signing is not configured
+        if: steps.signing.outputs.ready != 'true'
+        working-directory: android-app
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --stacktrace :app:assembleDebug \
+            -PcpaAbis=arm64-v8a \
+            -Pcpa.versionNameOverride='${{ steps.appver.outputs.name }}-debug' \
+            -Pcpa.versionCodeOverride='${{ steps.appver.outputs.code }}'
+
+      - name: Sign and verify release APK
+        if: steps.signing.outputs.ready == 'true'
+        id: package_release
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_B64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tools="$ANDROID_SDK_ROOT/build-tools/$ANDROID_BUILD_TOOLS_VERSION"
+          unsigned="android-app/app/build/outputs/apk/release/app-release-unsigned.apk"
+          [ -f "$unsigned" ] || { echo "Unsigned release APK not found" >&2; exit 1; }
+
+          mkdir -p dist
+          keystore="$RUNNER_TEMP/cliproxyapi-release.jks"
+          aligned="$RUNNER_TEMP/cliproxyapi-aligned.apk"
+          apk="dist/CLIProxyAPI-Android-${RELEASE_TAG}-arm64-v8a.apk"
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$keystore"
+
+          "$tools/zipalign" -f -P 16 4 "$unsigned" "$aligned"
+          "$tools/apksigner" sign \
+            --ks "$keystore" \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass env:STORE_PASSWORD \
+            --key-pass env:KEY_PASSWORD \
+            --out "$apk" \
+            "$aligned"
+          "$tools/apksigner" verify --verbose --print-certs "$apk"
+          "$tools/zipalign" -c -P 16 -v 4 "$apk"
+          echo "apk=$apk" >> "$GITHUB_OUTPUT"
+
+      - name: Collect debug APK
+        if: steps.signing.outputs.ready != 'true'
+        id: package_debug
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          src="android-app/app/build/outputs/apk/debug/app-debug.apk"
+          mkdir -p dist
+          apk="dist/CLIProxyAPI-Android-${RELEASE_TAG}-UNSTABLE-debug-arm64-v8a.apk"
+          cp "$src" "$apk"
+          echo "apk=$apk" >> "$GITHUB_OUTPUT"
+
+      - name: Validate APK contents
+        env:
+          APK_RELEASE: ${{ steps.package_release.outputs.apk }}
+          APK_DEBUG: ${{ steps.package_debug.outputs.apk }}
+          PANEL_SHA256: ${{ steps.upstream_bundle.outputs.panel_sha256 }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=${APK_RELEASE:-$APK_DEBUG}
+          [ -f "$apk" ] || { echo "APK not found" >&2; exit 1; }
+
+          unzip -Z1 "$apk" | grep -Fx 'lib/arm64-v8a/libcliproxyapi.so' >/dev/null || {
+            echo "APK is missing the arm64 CLIProxyAPI core" >&2
+            exit 1
+          }
+          if unzip -Z1 "$apk" | grep -q '^lib/x86_64/'; then
+            echo "Arm64 release unexpectedly contains x86_64 native libraries" >&2
+            exit 1
+          fi
+
+          embedded_panel_sha=$(unzip -p "$apk" assets/cpa/management.html | sha256sum | awk '{print $1}')
+          [ "$embedded_panel_sha" = "$PANEL_SHA256" ] || {
+            echo "Embedded Management Center digest mismatch" >&2
+            exit 1
+          }
+
+          elf_dir="$RUNNER_TEMP/apk-arm64-elf"
+          rm -rf "$elf_dir" && mkdir -p "$elf_dir"
+          unzip -q "$apk" 'lib/arm64-v8a/*.so' -d "$elf_dir"
+          bad=0
+          while IFS= read -r -d '' so; do
+            while read -r align; do
+              [ -n "$align" ] || continue
+              value=$((align))
+              if (( value < 0x4000 )); then
+                echo "16 KiB ELF alignment check failed: $so has LOAD alignment $align" >&2
+                bad=1
+              fi
+            done < <(readelf -lW "$so" | awk '$1 == "LOAD" {print $NF}')
+          done < <(find "$elf_dir/lib/arm64-v8a" -type f -name '*.so' -print0)
+          [ "$bad" -eq 0 ] || exit 1
+
+          echo "APK ABI, 16 KiB ELF alignment and embedded WebUI checks passed."
+
+      - name: Generate checksums, release notes and provenance
+        id: metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APK_RELEASE: ${{ steps.package_release.outputs.apk }}
+          APK_DEBUG: ${{ steps.package_debug.outputs.apk }}
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          SHELL_VERSION: ${{ needs.resolve.outputs.shell_version }}
+          UPSTREAM_TAG: ${{ needs.resolve.outputs.upstream_tag }}
+          UPSTREAM_TAR_SHA256: ${{ steps.upstream_bundle.outputs.tar_sha256 }}
+          UPSTREAM_CORE_BINARY_SHA256: ${{ steps.upstream_bundle.outputs.core_binary_sha256 }}
+          CORE_MODE: ${{ steps.core_compat.outputs.core_mode }}
+          SOURCE_REPO: ${{ steps.provenance.outputs.source_repo }}
+          SOURCE_TAG: ${{ steps.provenance.outputs.source_tag }}
+          SOURCE_SHA: ${{ steps.provenance.outputs.source_commit }}
+          MODELS_REPO: ${{ steps.provenance.outputs.models_repo }}
+          MODELS_REF: ${{ steps.provenance.outputs.models_ref }}
+          MODELS_SHA: ${{ steps.provenance.outputs.models_commit }}
+          PANEL_REPO: ${{ steps.provenance.outputs.panel_repo }}
+          PANEL_TAG: ${{ steps.provenance.outputs.panel_tag }}
+          PANEL_SHA256: ${{ steps.provenance.outputs.panel_sha256 }}
+          UPSTREAM_NDK: ${{ steps.provenance.outputs.upstream_ndk }}
+          UPSTREAM_GO: ${{ steps.provenance.outputs.upstream_go }}
+          VERSION_NAME: ${{ steps.appver.outputs.name }}
+          VERSION_CODE: ${{ steps.appver.outputs.code }}
+          SIGNED: ${{ steps.signing.outputs.ready }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=${APK_RELEASE:-$APK_DEBUG}
+          mkdir -p dist
+          (cd dist && sha256sum "$(basename "$apk")" > checksums.txt)
+
+          jq -n \
+            --arg releaseTag "$RELEASE_TAG" \
+            --arg shellVersion "$SHELL_VERSION" \
+            --arg shellCommit "$GITHUB_SHA" \
+            --arg directUpstreamRepository "$DIRECT_UPSTREAM_REPOSITORY" \
+            --arg directUpstreamTag "$UPSTREAM_TAG" \
+            --arg directUpstreamTarSha256 "$UPSTREAM_TAR_SHA256" \
+            --arg directUpstreamCoreBinarySha256 "$UPSTREAM_CORE_BINARY_SHA256" \
+            --arg coreMode "$CORE_MODE" \
+            --arg sourceRepository "$SOURCE_REPO" \
+            --arg sourceTag "$SOURCE_TAG" \
+            --arg sourceCommit "$SOURCE_SHA" \
+            --arg modelsRepository "$MODELS_REPO" \
+            --arg modelsRef "$MODELS_REF" \
+            --arg modelsCommit "$MODELS_SHA" \
+            --arg panelRepository "$PANEL_REPO" \
+            --arg panelTag "$PANEL_TAG" \
+            --arg panelSha256 "$PANEL_SHA256" \
+            --arg tsaNdk "$UPSTREAM_NDK" \
+            --arg tsaGo "$UPSTREAM_GO" \
+            --arg localNdk "$ANDROID_NDK_VERSION" \
+            --arg java "$(java -version 2>&1 | head -n1)" \
+            --arg versionName "$VERSION_NAME" \
+            --argjson versionCode "$VERSION_CODE" \
+            --argjson signed "$SIGNED" \
+            '{schemaVersion:2,releaseTag:$releaseTag,app:{shellVersion:$shellVersion,shellCommit:$shellCommit,versionName:$versionName,versionCode:$versionCode},directUpstream:{repository:$directUpstreamRepository,tag:$directUpstreamTag,tarSha256:$directUpstreamTarSha256,originalCoreBinarySha256:$directUpstreamCoreBinarySha256,toolchain:{androidNdk:$tsaNdk,go:$tsaGo}},core:{mode:$coreMode,sourceRepository:$sourceRepository,sourceTag:$sourceTag,sourceCommit:$sourceCommit,modelsRepository:$modelsRepository,modelsRef:$modelsRef,modelsCommit:$modelsCommit,localFallbackNdk:$localNdk},dashboard:{repository:$panelRepository,tag:$panelTag,sha256:$panelSha256,source:"direct-upstream-bundle"},java:$java,signed:$signed}' \
+            > dist/provenance.json
+
+          cp direct-upstream/provenance.json dist/tsaQB-provenance.json
+          cp direct-upstream/checksums.txt dist/tsaQB-checksums.txt
+
+          upstream_notes=$(gh api "repos/${DIRECT_UPSTREAM_REPOSITORY}/releases/tags/${UPSTREAM_TAG}" --jq '.body // ""')
+          cat > dist/release-notes.md <<EOF
+          ## CLIProxyAPI Android GUI automated build
+
+          - Android GUI shell: **v${SHELL_VERSION}** (${GITHUB_SHA:0:12})
+          - Direct upstream: **${DIRECT_UPSTREAM_REPOSITORY} ${UPSTREAM_TAG}**
+          - Core selected by tsaQB: **${SOURCE_TAG}** (${SOURCE_SHA:0:12})
+          - WebUI selected by tsaQB: **${PANEL_TAG}**
+          - Core packaging mode: **${CORE_MODE}**
+          - APK versionName: **${VERSION_NAME}**
+          - APK versionCode: **${VERSION_CODE}**
+          - ABI: **arm64-v8a**
+          - Minimum Android: **8.0 / API 26**
+          - Embedded browser: **GeckoView**, not Android System WebView
+
+          This workflow tracks **tsaQB/cliproxyapi-android as the direct upstream**. It does not independently resolve the latest CLIProxyAPI or Management Center versions.
+
+          The WebUI is taken byte-for-byte from the tsaQB Android release bundle. The core is also taken directly from that bundle when its ELF is 16 KiB compatible. If the tsaQB binary is still 4 KiB-only, the workflow rebuilds the **exact source/models commits recorded in tsaQB's provenance.json** with NDK r30 solely to preserve 16 KiB Android compatibility; it never substitutes a newer top-level release.
+
+          Direct upstream release: https://github.com/${DIRECT_UPSTREAM_REPOSITORY}/releases/tag/${UPSTREAM_TAG}
+
+          ## Direct-upstream release notes
+
+          ${upstream_notes}
+          EOF
+          echo "apk=$apk" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.resolve.outputs.release_tag }}
+          path: |
+            ${{ steps.metadata.outputs.apk }}
+            dist/checksums.txt
+            dist/provenance.json
+            dist/release-notes.md
+            dist/tsaQB-provenance.json
+            dist/tsaQB-checksums.txt
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish signed GitHub Release
+        if: steps.signing.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.resolve.outputs.release_tag }}
+          APK: ${{ steps.metadata.outputs.apk }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing release: $TAG" >&2
+            exit 1
+          fi
+          gh release create "$TAG" \
+            "$APK" \
+            dist/checksums.txt \
+            dist/provenance.json \
+            dist/release-notes.md \
+            dist/tsaQB-provenance.json \
+            dist/tsaQB-checksums.txt \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "CLIProxyAPI Android GUI $TAG" \
+            --notes-file dist/release-notes.md
