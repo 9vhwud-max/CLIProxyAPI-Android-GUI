@@ -168,3 +168,9 @@ cpa.shellVersionCode=4
 ```
 
 例如升级为 `0.3.2 / 5`。这样即使 tsaQB 直接上游版本没变化，也会生成新的组合 Release tag。
+
+### GitHub Hosted Runner 的 Android SDK 安装
+
+本工作流不使用 `android-actions/setup-android@v3`。该 Action 在较新的 Android command-line tools 环境中仍可能调用已经移除的 `sdkmanager tools` 包，从而以 `Failed to find package 'tools'` 失败。
+
+工作流会直接安装 Google command-line tools 16.0（build 12266719），然后使用该 `sdkmanager` 安装 `platforms;android-37.0`、Build Tools、Platform Tools，以及仅在需要 16 KiB 兼容重编 Core 时安装 NDK r30。

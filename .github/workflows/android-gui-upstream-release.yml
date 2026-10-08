@@ -334,21 +334,70 @@ jobs:
           cache: true
           cache-dependency-path: provenance-core/go.sum
 
-      - name: Set up Android SDK command-line tools
-        uses: android-actions/setup-android@v3
+      - name: Bootstrap Android SDK command-line tools 16
+        id: android_sdk
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sdk_root=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}
+          if [ -z "$sdk_root" ]; then
+            for candidate in /usr/local/lib/android/sdk "$HOME/Android/Sdk"; do
+              if [ -d "$candidate" ]; then
+                sdk_root="$candidate"
+                break
+              fi
+            done
+          fi
+          [ -n "$sdk_root" ] || { echo "Could not locate the Android SDK on this runner" >&2; exit 1; }
+          mkdir -p "$sdk_root/cmdline-tools"
+
+          # Do not use android-actions/setup-android@v3 here. As of cmdline-tools
+          # 16.0 that action still invokes `sdkmanager tools`, but the legacy
+          # `tools` SDK package no longer exists and causes the action to fail.
+          cmdline_version=16.0
+          cmdline_build=12266719
+          cmdline_dir="$sdk_root/cmdline-tools/$cmdline_version"
+          sdkmanager_bin="$cmdline_dir/bin/sdkmanager"
+
+          if [ ! -x "$sdkmanager_bin" ]; then
+            zip="$RUNNER_TEMP/commandlinetools-linux-${cmdline_build}_latest.zip"
+            unpack="$RUNNER_TEMP/android-cmdline-tools-$cmdline_version"
+            rm -rf "$unpack" "$cmdline_dir"
+            mkdir -p "$unpack" "$cmdline_dir"
+            curl -fL --retry 4 --retry-delay 2 --retry-all-errors \
+              "https://dl.google.com/android/repository/commandlinetools-linux-${cmdline_build}_latest.zip" \
+              -o "$zip"
+            unzip -q "$zip" -d "$unpack"
+            [ -x "$unpack/cmdline-tools/bin/sdkmanager" ] || {
+              echo "Downloaded command-line tools archive has an unexpected layout" >&2
+              exit 1
+            }
+            cp -a "$unpack/cmdline-tools/." "$cmdline_dir/"
+          fi
+
+          [ -x "$sdkmanager_bin" ] || { echo "sdkmanager not found: $sdkmanager_bin" >&2; exit 1; }
+          echo "ANDROID_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
+          echo "$cmdline_dir/bin" >> "$GITHUB_PATH"
+          echo "sdk_root=$sdk_root" >> "$GITHUB_OUTPUT"
+          echo "sdkmanager=$sdkmanager_bin" >> "$GITHUB_OUTPUT"
+          "$sdkmanager_bin" --version
 
       - name: Install Android platform, build tools and optional NDK
         shell: bash
         env:
           REBUILD_CORE: ${{ steps.core_compat.outputs.rebuild }}
+          SDKMANAGER: ${{ steps.android_sdk.outputs.sdkmanager }}
+          SDK_ROOT: ${{ steps.android_sdk.outputs.sdk_root }}
         run: |
           set -euo pipefail
-          sdk_root=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}
-          [ -n "$sdk_root" ] || { echo "Android SDK root was not exported by setup-android" >&2; exit 1; }
-          echo "ANDROID_SDK_ROOT=$sdk_root" >> "$GITHUB_ENV"
-          echo "ANDROID_HOME=$sdk_root" >> "$GITHUB_ENV"
+          [ -x "$SDKMANAGER" ] || { echo "sdkmanager is unavailable: $SDKMANAGER" >&2; exit 1; }
 
-          yes | sdkmanager --licenses >/dev/null || true
+          # Hosted runners are non-interactive, so accept the SDK licenses here.
+          # sdkmanager returns success once all required licenses are accepted.
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+
           packages=(
             "$ANDROID_PLATFORM_PACKAGE"
             "build-tools;$ANDROID_BUILD_TOOLS_VERSION"
@@ -357,10 +406,23 @@ jobs:
           if [ "$REBUILD_CORE" = true ]; then
             packages+=("ndk;$ANDROID_NDK_VERSION")
           fi
-          sdkmanager "${packages[@]}"
+
+          printf 'Installing Android SDK package: %s\n' "${packages[@]}"
+          "$SDKMANAGER" --install "${packages[@]}"
+
+          [ -f "$SDK_ROOT/platforms/android-37.0/android.jar" ] || {
+            echo "Android API 37.0 installation did not produce android.jar" >&2
+            exit 1
+          }
+          [ -x "$SDK_ROOT/build-tools/$ANDROID_BUILD_TOOLS_VERSION/zipalign" ] || {
+            echo "Android Build Tools $ANDROID_BUILD_TOOLS_VERSION were not installed correctly" >&2
+            exit 1
+          }
 
           if [ "$REBUILD_CORE" = true ]; then
-            echo "ANDROID_NDK_HOME=$sdk_root/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+            ndk_home="$SDK_ROOT/ndk/$ANDROID_NDK_VERSION"
+            [ -d "$ndk_home" ] || { echo "Android NDK was not installed: $ndk_home" >&2; exit 1; }
+            echo "ANDROID_NDK_HOME=$ndk_home" >> "$GITHUB_ENV"
           fi
 
       - name: Stage direct-upstream WebUI and core
