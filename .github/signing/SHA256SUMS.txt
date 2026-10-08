@@ -1,0 +1,2 @@
+5c112ff8c2c36f08ffa5ed0e99d3286a21f3e0fca5ef1ef21b3e11dd119dc6cf  /mnt/data/public_sign_patch/.github/signing/cliproxyapi-public-prerelease.p12
+35f0a5110ac0e3c1b5b17871d393b2b6c39f15063ca8499a32703852ef06f5b9  /mnt/data/public_sign_patch/.github/signing/cliproxyapi-public-prerelease-cert.pem

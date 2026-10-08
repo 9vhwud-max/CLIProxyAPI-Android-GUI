@@ -1,0 +1,26 @@
+Alias name: cliproxyapi-public
+Creation date: Oct 8, 2026
+Entry type: PrivateKeyEntry
+Certificate chain length: 1
+Certificate[1]:
+Owner: CN=CLIProxyAPI Android GUI Public Pre-release, OU=Open Source Builds, O=CLIProxyAPI Android GUI, L=Internet, ST=Internet, C=US
+Issuer: CN=CLIProxyAPI Android GUI Public Pre-release, OU=Open Source Builds, O=CLIProxyAPI Android GUI, L=Internet, ST=Internet, C=US
+Serial number: 4b6a6506187e5ada
+Valid from: Thu Oct 08 07:53:50 UTC 2026 until: Sat Sep 14 07:53:50 UTC 2126
+Certificate fingerprints:
+	 SHA1: 66:DF:EA:3A:C4:82:D8:DE:42:B5:D9:A3:35:CA:C8:2D:98:59:50:1E
+	 SHA256: C3:60:7D:A9:C2:8C:61:DD:B8:0C:D8:1E:BB:07:35:2E:19:73:47:AD:1C:E9:0B:83:ED:54:C0:25:16:E7:05:74
+Signature algorithm name: SHA256withRSA
+Subject Public Key Algorithm: 4096-bit RSA key
+Version: 3
+
+Extensions: 
+
+#1: ObjectId: 2.5.29.14 Criticality=false
+SubjectKeyIdentifier [
+KeyIdentifier [
+0000: 73 91 AD 2E BC 2E 1A 24   E6 42 E1 6C 7F 95 5E C4  s......$.B.l..^.
+0010: C1 E4 DD FD                                        ....
+]
+]
+

@@ -510,7 +510,7 @@ jobs:
           echo "versionName=$version_name"
           echo "versionCode=$version_code"
 
-      - name: Detect release-signing secrets
+      - name: Select APK signing identity
         id: signing
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_B64 }}
@@ -519,15 +519,24 @@ jobs:
           KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
         shell: bash
         run: |
+          set -euo pipefail
+          bundled=".github/signing/cliproxyapi-public-prerelease.p12"
           if [ -n "$KEYSTORE_B64" ] && [ -n "$STORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "mode=repository-secret" >> "$GITHUB_OUTPUT"
+            echo "Using private release signing key from GitHub Secrets."
+          elif [ -f "$bundled" ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "mode=bundled-public-prerelease" >> "$GITHUB_OUTPUT"
+            echo "::warning::Using the repository-bundled PUBLIC pre-release signing key. This preserves update continuity but provides no signer authenticity because the private key is public."
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Release signing secrets are incomplete. A debug APK will be built as an Actions artifact, but no GitHub Release will be published."
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+            echo "No signing identity is available." >&2
+            exit 1
           fi
 
       - name: Build release APK
-        if: steps.signing.outputs.ready == 'true'
         working-directory: android-app
         shell: bash
         run: |
@@ -537,25 +546,17 @@ jobs:
             -Pcpa.versionNameOverride='${{ steps.appver.outputs.name }}' \
             -Pcpa.versionCodeOverride='${{ steps.appver.outputs.code }}'
 
-      - name: Build debug APK when signing is not configured
-        if: steps.signing.outputs.ready != 'true'
-        working-directory: android-app
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./gradlew --no-daemon --stacktrace :app:assembleDebug \
-            -PcpaAbis=arm64-v8a \
-            -Pcpa.versionNameOverride='${{ steps.appver.outputs.name }}-debug' \
-            -Pcpa.versionCodeOverride='${{ steps.appver.outputs.code }}'
-
       - name: Sign and verify release APK
-        if: steps.signing.outputs.ready == 'true'
         id: package_release
         env:
+          SIGNING_MODE: ${{ steps.signing.outputs.mode }}
           KEYSTORE_B64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_B64 }}
           STORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_STORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
+          PUBLIC_STORE_PASSWORD: cliproxyapi-public-prerelease
+          PUBLIC_KEY_ALIAS: cliproxyapi-public
+          PUBLIC_KEY_PASSWORD: cliproxyapi-public-prerelease
           RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
         shell: bash
         run: |
@@ -565,46 +566,46 @@ jobs:
           [ -f "$unsigned" ] || { echo "Unsigned release APK not found" >&2; exit 1; }
 
           mkdir -p dist
-          keystore="$RUNNER_TEMP/cliproxyapi-release.jks"
           aligned="$RUNNER_TEMP/cliproxyapi-aligned.apk"
           apk="dist/CLIProxyAPI-Android-${RELEASE_TAG}-arm64-v8a.apk"
-          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$keystore"
+
+          if [ "$SIGNING_MODE" = "repository-secret" ]; then
+            keystore="$RUNNER_TEMP/cliproxyapi-release.jks"
+            printf '%s' "$KEYSTORE_B64" | base64 --decode > "$keystore"
+            export EFFECTIVE_STORE_PASSWORD="$STORE_PASSWORD"
+            export EFFECTIVE_KEY_PASSWORD="$KEY_PASSWORD"
+            effective_alias="$KEY_ALIAS"
+          elif [ "$SIGNING_MODE" = "bundled-public-prerelease" ]; then
+            keystore="$GITHUB_WORKSPACE/.github/signing/cliproxyapi-public-prerelease.p12"
+            [ -f "$keystore" ] || { echo "Bundled public signing keystore is missing: $keystore" >&2; exit 1; }
+            export EFFECTIVE_STORE_PASSWORD="$PUBLIC_STORE_PASSWORD"
+            export EFFECTIVE_KEY_PASSWORD="$PUBLIC_KEY_PASSWORD"
+            effective_alias="$PUBLIC_KEY_ALIAS"
+          else
+            echo "Unsupported signing mode: $SIGNING_MODE" >&2
+            exit 1
+          fi
 
           "$tools/zipalign" -f -P 16 4 "$unsigned" "$aligned"
           "$tools/apksigner" sign \
             --ks "$keystore" \
-            --ks-key-alias "$KEY_ALIAS" \
-            --ks-pass env:STORE_PASSWORD \
-            --key-pass env:KEY_PASSWORD \
+            --ks-key-alias "$effective_alias" \
+            --ks-pass env:EFFECTIVE_STORE_PASSWORD \
+            --key-pass env:EFFECTIVE_KEY_PASSWORD \
             --out "$apk" \
             "$aligned"
           "$tools/apksigner" verify --verbose --print-certs "$apk"
           "$tools/zipalign" -c -P 16 -v 4 "$apk"
           echo "apk=$apk" >> "$GITHUB_OUTPUT"
 
-      - name: Collect debug APK
-        if: steps.signing.outputs.ready != 'true'
-        id: package_debug
-        env:
-          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          src="android-app/app/build/outputs/apk/debug/app-debug.apk"
-          mkdir -p dist
-          apk="dist/CLIProxyAPI-Android-${RELEASE_TAG}-UNSTABLE-debug-arm64-v8a.apk"
-          cp "$src" "$apk"
-          echo "apk=$apk" >> "$GITHUB_OUTPUT"
-
       - name: Validate APK contents
         env:
           APK_RELEASE: ${{ steps.package_release.outputs.apk }}
-          APK_DEBUG: ${{ steps.package_debug.outputs.apk }}
           PANEL_SHA256: ${{ steps.upstream_bundle.outputs.panel_sha256 }}
         shell: bash
         run: |
           set -euo pipefail
-          apk=${APK_RELEASE:-$APK_DEBUG}
+          apk=$APK_RELEASE
           [ -f "$apk" ] || { echo "APK not found" >&2; exit 1; }
 
           unzip -Z1 "$apk" | grep -Fx 'lib/arm64-v8a/libcliproxyapi.so' >/dev/null || {
@@ -645,7 +646,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           APK_RELEASE: ${{ steps.package_release.outputs.apk }}
-          APK_DEBUG: ${{ steps.package_debug.outputs.apk }}
           RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
           SHELL_VERSION: ${{ needs.resolve.outputs.shell_version }}
           UPSTREAM_TAG: ${{ needs.resolve.outputs.upstream_tag }}
@@ -666,10 +666,12 @@ jobs:
           VERSION_NAME: ${{ steps.appver.outputs.name }}
           VERSION_CODE: ${{ steps.appver.outputs.code }}
           SIGNED: ${{ steps.signing.outputs.ready }}
+          SIGNING_MODE: ${{ steps.signing.outputs.mode }}
+          SIGNING_MODE: ${{ steps.signing.outputs.mode }}
         shell: bash
         run: |
           set -euo pipefail
-          apk=${APK_RELEASE:-$APK_DEBUG}
+          apk=$APK_RELEASE
           mkdir -p dist
           (cd dist && sha256sum "$(basename "$apk")" > checksums.txt)
 
@@ -698,7 +700,8 @@ jobs:
             --arg versionName "$VERSION_NAME" \
             --argjson versionCode "$VERSION_CODE" \
             --argjson signed "$SIGNED" \
-            '{schemaVersion:2,releaseTag:$releaseTag,app:{shellVersion:$shellVersion,shellCommit:$shellCommit,versionName:$versionName,versionCode:$versionCode},directUpstream:{repository:$directUpstreamRepository,tag:$directUpstreamTag,tarSha256:$directUpstreamTarSha256,originalCoreBinarySha256:$directUpstreamCoreBinarySha256,toolchain:{androidNdk:$tsaNdk,go:$tsaGo}},core:{mode:$coreMode,sourceRepository:$sourceRepository,sourceTag:$sourceTag,sourceCommit:$sourceCommit,modelsRepository:$modelsRepository,modelsRef:$modelsRef,modelsCommit:$modelsCommit,localFallbackNdk:$localNdk},dashboard:{repository:$panelRepository,tag:$panelTag,sha256:$panelSha256,source:"direct-upstream-bundle"},java:$java,signed:$signed}' \
+            --arg signingMode "$SIGNING_MODE" \
+            '{schemaVersion:2,releaseTag:$releaseTag,app:{shellVersion:$shellVersion,shellCommit:$shellCommit,versionName:$versionName,versionCode:$versionCode},directUpstream:{repository:$directUpstreamRepository,tag:$directUpstreamTag,tarSha256:$directUpstreamTarSha256,originalCoreBinarySha256:$directUpstreamCoreBinarySha256,toolchain:{androidNdk:$tsaNdk,go:$tsaGo}},core:{mode:$coreMode,sourceRepository:$sourceRepository,sourceTag:$sourceTag,sourceCommit:$sourceCommit,modelsRepository:$modelsRepository,modelsRef:$modelsRef,modelsCommit:$modelsCommit,localFallbackNdk:$localNdk},dashboard:{repository:$panelRepository,tag:$panelTag,sha256:$panelSha256,source:"direct-upstream-bundle"},java:$java,signed:$signed,signingMode:$signingMode}' \
             > dist/provenance.json
 
           cp direct-upstream/provenance.json dist/tsaQB-provenance.json
@@ -718,6 +721,9 @@ jobs:
           - ABI: **arm64-v8a**
           - Minimum Android: **8.0 / API 26**
           - Embedded browser: **GeckoView**, not Android System WebView
+          - APK signing mode: **${SIGNING_MODE}**
+
+          If `APK signing mode` is `bundled-public-prerelease`, the private signing key is intentionally committed to this public repository. It provides a stable Android package signature for update continuity only; it does **not** prove publisher authenticity because anyone can reuse the same public private key.
 
           This workflow tracks **tsaQB/cliproxyapi-android as the direct upstream**. It does not independently resolve the latest CLIProxyAPI or Management Center versions.
 
@@ -751,6 +757,7 @@ jobs:
           TAG: ${{ needs.resolve.outputs.release_tag }}
           APK: ${{ steps.metadata.outputs.apk }}
           SIGNED: ${{ steps.signing.outputs.ready }}
+          SIGNING_MODE: ${{ steps.signing.outputs.mode }}
         shell: bash
         run: |
           set -euo pipefail
@@ -759,10 +766,10 @@ jobs:
             exit 1
           fi
 
-          if [ "$SIGNED" = true ]; then
-            title="CLIProxyAPI Android GUI $TAG"
+          if [ "$SIGNING_MODE" = "bundled-public-prerelease" ]; then
+            title="CLIProxyAPI Android GUI $TAG (public pre-release signature)"
           else
-            title="CLIProxyAPI Android GUI $TAG (UNSTABLE debug)"
+            title="CLIProxyAPI Android GUI $TAG"
           fi
 
           gh release create "$TAG" \
